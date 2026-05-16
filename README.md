@@ -4,7 +4,7 @@
 
 ![Python](https://img.shields.io/badge/python-3.9+-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
-![Tests](https://img.shields.io/badge/tests-passing-brightgreen.svg)
+[![tests](https://github.com/gokhanagarer/content-genie/actions/workflows/test.yml/badge.svg)](https://github.com/gokhanagarer/content-genie/actions/workflows/test.yml)
 ![Demo](https://img.shields.io/badge/demo-runs%20offline-blue.svg)
 
 ## What it does
