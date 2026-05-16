@@ -1,0 +1,2480 @@
+{
+  "name": "Content Genie — full blog content pipeline",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -6400,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "CONTENT_GENIE_SPREADSHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Config",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "name": "Read Config",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [
+        -6100,
+        400
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Connect this credential in n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const configRows = $input.all();\nconst config = {};\n\nfor (const row of configRows) {\n  const rawKey = row.json['Key'] || row.json['key'] || '';\n  const rawValue = row.json['Value'] || row.json['value'] || '';\n  const key = String(rawKey).trim();\n  const value = String(rawValue).trim();\n  if (key && value) config[key] = value;\n}\n\n// Parse competitors\nconfig.competitors = [];\nfor (let i = 1; i <= 5; i++) {\n  const comp = config[`competitor_${i}`];\n  if (comp && String(comp).trim()) config.competitors.push(String(comp).trim());\n}\n\n// Parse seed keywords (comma-separated)\nconfig.seed_keywords = String(config.seed_keywords || '')\n  .split(',').map(k => k.trim()).filter(Boolean);\n\n// Parse brand colors\nconfig.brand_colors_array = String(config.brand_colors || '')\n  .split(',').map(c => c.trim()).filter(Boolean);\n\n// Numeric configs with defaults\nconfig.max_blogs_per_run = parseInt(config.max_blogs_per_run) || 5;\nconfig.min_keyword_volume = parseInt(config.min_keyword_volume) || 100;\nconfig.content_length_target = parseInt(config.content_length_target) || 2000;\nconfig.serp_results_count = parseInt(config.serp_results_count) || 10;\n\n// Defaults\nconfig.language = config.language || 'tr';\nconfig.country_code = config.country_code || 'TR';\nconfig.image_style = config.image_style || 'modern, minimalist, corporate';\nconfig.today = new Date().toISOString().split('T')[0];\n\nreturn [{ json: { config } }];"
+      },
+      "name": "Build Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -5800,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "CONTENT_GENIE_SPREADSHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Keywords",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "name": "Read Keywords Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [
+        -5500,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Connect this credential in n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "CONTENT_GENIE_SPREADSHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Content Pipeline",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "name": "Read Content Pipeline",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [
+        -5500,
+        500
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Connect this credential in n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const config = $('Build Config').first().json.config;\n\nlet existingKeywords = [];\ntry {\n  existingKeywords = $('Read Keywords Sheet').all()\n    .map(r => r.json).filter(r => r.keyword);\n} catch(e) {}\n\nlet pipelineItems = [];\ntry {\n  pipelineItems = $('Read Content Pipeline').all()\n    .map(r => r.json).filter(r => r.content_id);\n} catch(e) {}\n\nconst resumeItems = pipelineItems.filter(row => {\n  const s = row.status;\n  return s && !['publish_ready', 'published', 'rejected'].includes(s);\n});\n\nconst approvedUnassigned = existingKeywords.filter(\n  k => (k.status === 'approved' || k.status === 'new') && !k.assigned_content_id\n);\nconst needsDiscovery = approvedUnassigned.length === 0 && resumeItems.length === 0;\n\nreturn [{\n  json: {\n    config,\n    needsDiscovery,\n    resumeCount: resumeItems.length,\n    existingKeywords: existingKeywords.map(k => (k.keyword || '').toLowerCase()),\n    resumeItems,\n    approvedKeywords: approvedUnassigned\n  }\n}];"
+      },
+      "name": "Resume Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -5200,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.needsDiscovery }}",
+              "rightValue": "true",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and",
+          "options": {
+            "caseSensitive": true,
+            "leftValue": ""
+          }
+        },
+        "options": {}
+      },
+      "name": "Needs Discovery?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -4900,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst config = data.config;\nconst competitors = config.competitors || [];\nconst seedKeywords = config.seed_keywords || [];\n\nif (seedKeywords.length === 0 && competitors.length === 0) {\n  throw new Error('Config hatas: seed_keywords veya competitor_1..5 tanimlanmali!');\n}\n\nconst queries = [];\n\n// Seed keyword searches\nfor (const kw of seedKeywords) {\n  queries.push({\n    query: kw,\n    type: 'seed_keyword',\n    config\n  });\n}\n\n// Competitor site searches - find their top content\nfor (const comp of competitors) {\n  queries.push({\n    query: `site:${comp}`,\n    type: 'competitor_content',\n    competitor: comp,\n    config\n  });\n}\n\n// Competitor + seed keyword combinations\nfor (const comp of competitors.slice(0, 3)) {\n  for (const kw of seedKeywords.slice(0, 3)) {\n    queries.push({\n      query: `site:${comp} ${kw}`,\n      type: 'competitor_keyword',\n      competitor: comp,\n      keyword: kw,\n      config\n    });\n  }\n}\n\nreturn queries.map(q => ({ json: q }));"
+      },
+      "name": "Build Search Queries",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -4600,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "name": "Process Searches",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -4300,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://serpapi.com/search.json",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "={{ $json.query }}"
+            },
+            {
+              "name": "location",
+              "value": "=Turkey"
+            },
+            {
+              "name": "hl",
+              "value": "={{ $json.config.language || 'tr' }}"
+            },
+            {
+              "name": "gl",
+              "value": "={{ ($json.config.country_code || 'TR').toLowerCase() }}"
+            },
+            {
+              "name": "num",
+              "value": "={{ $json.config.serp_results_count || 10 }}"
+            },
+            {
+              "name": "engine",
+              "value": "google"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "SerpAPI Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -4000,
+        300
+      ],
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Connect this credential in n8n"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "jsCode": "const searchItem = $('Process Searches').first().json;\nconst serpData = $json;\n\n// Extract organic results\nconst organicResults = (serpData.organic_results || []).map(r => ({\n  position: r.position,\n  title: r.title || '',\n  link: r.link || '',\n  snippet: r.snippet || '',\n  displayed_link: r.displayed_link || '',\n}));\n\n// Extract related searches\nconst relatedSearches = (serpData.related_searches || []).map(r => r.query || '');\n\n// Extract people also ask\nconst peopleAlsoAsk = (serpData.related_questions || []).map(r => ({\n  question: r.question || '',\n  snippet: r.snippet || '',\n}));\n\n// Search information\nconst searchInfo = {\n  total_results: serpData.search_information?.total_results || 0,\n  query_displayed: serpData.search_information?.query_displayed || searchItem.query,\n};\n\nreturn [{\n  json: {\n    query: searchItem.query,\n    type: searchItem.type,\n    competitor: searchItem.competitor || '',\n    keyword: searchItem.keyword || '',\n    config: searchItem.config,\n    serp: {\n      organic: organicResults,\n      related_searches: relatedSearches,\n      people_also_ask: peopleAlsoAsk,\n      search_info: searchInfo,\n    }\n  }\n}];"
+      },
+      "name": "Collect SERP Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3700,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge all SERP results into a comprehensive dataset\nconst allItems = $input.all();\nlet config = null;\n\nconst allOrganicResults = [];\nconst allRelatedSearches = new Set();\nconst allPeopleAlsoAsk = [];\nconst competitorPages = {};\n\nfor (const item of allItems) {\n  const d = item.json;\n  if (!config && d.config) config = d.config;\n\n  // Collect organic results\n  for (const r of (d.serp?.organic || [])) {\n    allOrganicResults.push({\n      ...r,\n      query: d.query,\n      search_type: d.type,\n      competitor: d.competitor,\n    });\n  }\n\n  // Collect related searches\n  for (const rs of (d.serp?.related_searches || [])) {\n    allRelatedSearches.add(rs.toLowerCase().trim());\n  }\n\n  // Collect people also ask\n  for (const paa of (d.serp?.people_also_ask || [])) {\n    allPeopleAlsoAsk.push(paa);\n  }\n\n  // Collect competitor pages\n  if (d.type === 'competitor_content' || d.type === 'competitor_keyword') {\n    const comp = d.competitor;\n    if (!competitorPages[comp]) competitorPages[comp] = [];\n    for (const r of (d.serp?.organic || [])) {\n      competitorPages[comp].push({\n        url: r.link,\n        title: r.title,\n        snippet: r.snippet,\n        position: r.position,\n      });\n    }\n  }\n}\n\nreturn [{\n  json: {\n    config,\n    serpSummary: {\n      totalOrganicResults: allOrganicResults.length,\n      uniqueRelatedSearches: Array.from(allRelatedSearches),\n      peopleAlsoAsk: allPeopleAlsoAsk.slice(0, 20),\n      competitorPages,\n      topResults: allOrganicResults.slice(0, 50),\n    }\n  }\n}];"
+      },
+      "name": "Merge All SERP Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -3100,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst config = data.config;\nconst serp = data.serpSummary;\n\n// Format SERP data for Gemini analysis\nconst competitorSummary = Object.entries(serp.competitorPages)\n  .map(([comp, pages]) => {\n    const pageList = pages.slice(0, 10).map(p =>\n      `  - [${p.position}] \"${p.title}\" - ${p.snippet?.substring(0, 100) || ''}`\n    ).join('\\n');\n    return `Rakip: ${comp}\\n${pageList}`;\n  }).join('\\n\\n');\n\nconst topResultsList = serp.topResults.slice(0, 30).map(r =>\n  `- [${r.position}] (${r.search_type}) \"${r.title}\" | ${r.displayed_link} | ${r.snippet?.substring(0, 80) || ''}`\n).join('\\n');\n\nconst relatedList = serp.uniqueRelatedSearches.slice(0, 30).join(', ');\nconst paaList = serp.peopleAlsoAsk.slice(0, 15).map(p => `- ${p.question}`).join('\\n');\n\nconst prompt = `Sen bir SEO uzmani ve anahtar kelime analistsin. Google arama sonuclarini analiz ederek hedef siteye uygun anahtar kelimeleri ve blog konularini belirle.\n\nSIRKET BILGILERI:\n- Sirket: ${config.company_name || 'Belirtilmemis'}\n- Domain: ${config.domain || 'Belirtilmemis'}\n- Sektor: ${config.sector || 'Belirtilmemis'}\n- Hedef Kitle: ${config.target_audience || 'Belirtilmemis'}\n- Deger Onerisi: ${config.unique_selling_points || 'Belirtilmemis'}\n\nSEED ANAHTAR KELIMELER: ${(config.seed_keywords || []).join(', ')}\n\nRAKIP SAYFALARI:\n${competitorSummary || 'Veri yok'}\n\nEN IYI ARAMA SONUCLARI:\n${topResultsList || 'Veri yok'}\n\nILGILI ARAMALAR: ${relatedList || 'Yok'}\n\nINSANLARIN SORDUGU SORULAR:\n${paaList || 'Yok'}\n\nGOREV:\n1. Bu verileri analiz et ve ${config.max_blogs_per_run || 5} adet yuksek potansiyelli anahtar kelime + blog konusu belirle.\n2. Her anahtar kelime icin tahminsel hacim, zorluk ve rekabet durumu belirt.\n3. Content gap'leri (rakiplerin ele aldigi ama bizim ele almadigimiz konulari) oncelikle sec.\n4. Insanlarin sordugu sorulari (PAA) blog konularina dahil et.\n\nHER ANAHTAR KELIME ICIN DONDUR:\n[\n  {\n    \"keyword\": \"anahtar kelime\",\n    \"estimated_volume\": \"yuksek/orta/dusuk\",\n    \"competition\": \"yuksek/orta/dusuk\",\n    \"intent\": \"informational/commercial/transactional\",\n    \"is_content_gap\": true/false,\n    \"priority_score\": 85,\n    \"related_keywords\": [\"ilgili1\", \"ilgili2\"],\n    \"suggested_title_tr\": \"Turkce blog basligi onerisi\",\n    \"content_angle\": \"Yaklasim aciklamasi\",\n    \"paa_questions\": [\"Soru 1?\", \"Soru 2?\"]\n  }\n]\n\nKURALLAR:\n- Tum basliklar ve aciklamalar Turkce olmali\n- Priority score 0-100 arasi (yuksek = daha iyi firsat)\n- Content gap'lere yuksek skor ver\n- Sadece JSON dizi dondur`;\n\nreturn [{\n  json: {\n    config,\n    serpSummary: serp,\n    requestBody: {\n      contents: [{ parts: [{ text: prompt }] }],\n      generationConfig: { temperature: 0.5, maxOutputTokens: 4096 }\n    }\n  }\n}];"
+      },
+      "name": "Build KW Analysis Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2800,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.requestBody }}",
+        "options": {}
+      },
+      "name": "Gemini KW Analysis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -2500,
+        200
+      ],
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Connect this credential in n8n"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "jsCode": "const resp = $json;\nconst config = $('Build KW Analysis Prompt').first().json.config;\n\nlet keywords;\ntry {\n  const text = resp.candidates?.[0]?.content?.parts?.[0]?.text || '';\n  const clean = text.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\n  keywords = JSON.parse(clean.match(/\\[[\\s\\S]*\\]/)[0]);\n} catch(e) {\n  throw new Error('Gemini KW analysis parse error: ' + e.message);\n}\n\nreturn keywords.map(kw => ({\n  json: {\n    keyword: kw.keyword || '',\n    source: 'serp_analysis',\n    source_detail: 'SerpAPI + Gemini',\n    estimated_volume: kw.estimated_volume || 'orta',\n    competition: kw.competition || 'orta',\n    intent: kw.intent || 'informational',\n    is_content_gap: kw.is_content_gap ? 'TRUE' : 'FALSE',\n    priority_score: kw.priority_score || 50,\n    related_keywords: (kw.related_keywords || []).join(', '),\n    suggested_title: kw.suggested_title_tr || '',\n    content_angle: kw.content_angle || '',\n    paa_questions: (kw.paa_questions || []).join(' | '),\n    cluster_name: '',\n    status: 'new',\n    assigned_content_id: '',\n    discovery_date: new Date().toISOString()\n  }\n}));"
+      },
+      "name": "Parse KW Analysis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2200,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "CONTENT_GENIE_SPREADSHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Keywords",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {}
+        },
+        "options": {}
+      },
+      "name": "Append Keywords Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [
+        -1900,
+        200
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Connect this credential in n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "let config, keywords;\n\ntry {\n  config = $('Build KW Analysis Prompt').first().json.config;\n  keywords = $('Parse KW Analysis').all().map(i => i.json);\n} catch(e) {\n  const resumeData = $('Resume Check').first().json;\n  config = resumeData.config;\n  keywords = resumeData.approvedKeywords || [];\n}\n\nconst maxBlogs = config.max_blogs_per_run || 5;\nconst topKeywords = keywords\n  .sort((a, b) => (b.priority_score || 0) - (a.priority_score || 0))\n  .slice(0, maxBlogs * 5);\n\nreturn [{\n  json: { config, maxBlogs, topKeywords }\n}];"
+      },
+      "name": "Prepare Top Keywords",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1600,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $input.first().json;\nconst config = data.config;\nconst keywords = data.topKeywords;\nconst maxBlogs = data.maxBlogs;\n\nconst kwList = keywords.map(k =>\n  `- \"${k.keyword}\" (hacim: ${k.estimated_volume || '?'}, rekabet: ${k.competition || '?'}, gap: ${k.is_content_gap}, skor: ${k.priority_score}, oneri: \"${k.suggested_title || ''}\")`\n).join('\\n');\n\nconst prompt = `Sen bir SEO uzmani ve icerik stratejistsin. Asagidaki anahtar kelimelerden ${maxBlogs} adet blog konusu olustur.\n\nSIRKET:\n- Ad: ${config.company_name || 'Belirtilmemis'}\n- Sektor: ${config.sector || 'Belirtilmemis'}\n- Domain: ${config.domain || 'Belirtilmemis'}\n- Hedef Kitle: ${config.target_audience || 'Belirtilmemis'}\n- Deger Onerisi: ${config.unique_selling_points || 'Belirtilmemis'}\n- Dil: Turkce\n\nANAHTAR KELIMELER:\n${kwList}\n\nKURALLAR:\n1. Content gap'lere oncelik ver\n2. Her blog farkli bir arama niyetine hitap etsin\n3. Basliklar SEO uyumlu, dikkat cekici, Turkce\n4. Slug'lar Turkce karakter icermemeli (c,g,i,o,s,u)\n5. Kannibalizasyonu onle - birbiriyle carpisan konulari birlestir\n\nJSON FORMATI (sadece JSON dizi):\n[\n  {\n    \"cluster_name\": \"Kume adi\",\n    \"primary_keyword\": \"ana anahtar kelime\",\n    \"secondary_keywords\": [\"ikincil1\", \"ikincil2\", \"ikincil3\"],\n    \"blog_title_tr\": \"55-65 karakter SEO baslik\",\n    \"blog_slug\": \"url-uyumlu-slug\",\n    \"meta_description_tr\": \"155 karakter meta aciklama\",\n    \"content_angle\": \"Yaklasim aciklamasi\",\n    \"target_intent\": \"informational\"\n  }\n]`;\n\nreturn [{\n  json: {\n    config, maxBlogs,\n    requestBody: {\n      contents: [{ parts: [{ text: prompt }] }],\n      generationConfig: { temperature: 0.7, maxOutputTokens: 4096 }\n    }\n  }\n}];"
+      },
+      "name": "Build Topic Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1300,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.requestBody }}",
+        "options": {}
+      },
+      "name": "Gemini Topics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1000,
+        400
+      ],
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Connect this credential in n8n"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "jsCode": "const resp = $json;\nconst config = $('Build Topic Prompt').first().json.config;\nconst maxBlogs = $('Build Topic Prompt').first().json.maxBlogs;\n\nlet blogPlans;\ntry {\n  const text = resp.candidates?.[0]?.content?.parts?.[0]?.text || '';\n  const clean = text.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\n  blogPlans = JSON.parse(clean.match(/\\[[\\s\\S]*\\]/)[0]);\n} catch(e) {\n  throw new Error('Topic parse error: ' + e.message);\n}\n\nblogPlans = blogPlans.slice(0, maxBlogs);\nconst now = new Date().toISOString();\n\nreturn blogPlans.map((plan, i) => ({\n  json: {\n    content_id: `CG-${Date.now()}-${i}`,\n    status: 'planned',\n    primary_keyword: plan.primary_keyword || '',\n    secondary_keywords: (plan.secondary_keywords || []).join(', '),\n    cluster_name: plan.cluster_name || '',\n    blog_title_tr: plan.blog_title_tr || '',\n    blog_slug: plan.blog_slug || '',\n    meta_description_tr: plan.meta_description_tr || '',\n    content_angle: plan.content_angle || '',\n    outline_json: '', content_word_count: 0,\n    doc_url: '', doc_id: '',\n    hero_image_url: '', hero_image_id: '',\n    info_image_url: '', info_image_id: '',\n    photo_image_url: '', photo_image_id: '',\n    hero_alt_text: '', info_alt_text: '', photo_alt_text: '',\n    created_date: now, updated_date: now,\n    error_message: '', retry_count: 0, phase_checkpoint: 2,\n    _config: config\n  }\n}));"
+      },
+      "name": "Parse Topics",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -700,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "CONTENT_GENIE_SPREADSHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Content Pipeline",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {}
+        },
+        "options": {}
+      },
+      "name": "Write Blog Plans",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [
+        -400,
+        400
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Connect this credential in n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "name": "Process Blogs",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -100,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const blog = $input.first().json;\nconst config = blog._config || $('Build Config').first().json.config;\n\nconst prompt = `Sen deneyimli bir ${config.sector || 'dijital'} sektoru icerik editorusun.\n\nSIRKET: ${config.company_name || ''}\nTON: ${config.tone_of_voice || 'Profesyonel'}\nHEDEF KITLE: ${config.target_audience || 'Genel'}\n\nBLOG:\n- Baslik: ${blog.blog_title_tr}\n- Ana Anahtar Kelime: ${blog.primary_keyword}\n- Ikincil Kelimeler: ${blog.secondary_keywords}\n- Icerik Acisi: ${blog.content_angle || ''}\n- Hedef Kelime Sayisi: ${config.content_length_target || 2000}\n\nKURALLAR:\n1. Giris: Hook + problem + vaat\n2. Min 4, max 7 H2 bolum\n3. Her H2 altinda 2-3 H3\n4. Her bolum icin kelime sayisi\n5. Ana keyword H2'lerin 2'sinde gecmeli\n6. FAQ bolumu (4-5 soru)\n7. Sonuc: Ozet + CTA\n\nJSON (sadece JSON):\n{\n  \"title\": \"...\",\n  \"meta_description\": \"...\",\n  \"estimated_total_words\": 2000,\n  \"sections\": [\n    {\"type\": \"intro\", \"heading\": null, \"key_points\": [\"...\"], \"target_words\": 200, \"keywords_to_include\": [\"...\"]},\n    {\"type\": \"h2\", \"heading\": \"...\", \"target_words\": 300, \"keywords_to_include\": [\"...\"],\n     \"subsections\": [{\"type\": \"h3\", \"heading\": \"...\", \"key_points\": [\"...\"], \"target_words\": 150}]},\n    {\"type\": \"faq\", \"heading\": \"Sikca Sorulan Sorular\",\n     \"questions\": [{\"q\": \"?\", \"answer_points\": [\"...\"]}], \"target_words\": 300},\n    {\"type\": \"conclusion\", \"heading\": \"Sonuc\", \"key_points\": [\"...\"], \"cta\": \"...\", \"target_words\": 150}\n  ]\n}`;\n\nreturn [{\n  json: {\n    ...blog, _config: config,\n    outlineRequest: {\n      contents: [{ parts: [{ text: prompt }] }],\n      generationConfig: { temperature: 0.5, maxOutputTokens: 4096 }\n    }\n  }\n}];"
+      },
+      "name": "Build Outline Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.outlineRequest }}",
+        "options": {}
+      },
+      "name": "Gemini Outline",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        800,
+        200
+      ],
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Connect this credential in n8n"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "jsCode": "const blog = $('Build Outline Prompt').first().json;\nconst text = $json.candidates?.[0]?.content?.parts?.[0]?.text || '';\nlet outline;\ntry {\n  const clean = text.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\n  outline = JSON.parse(clean.match(/\\{[\\s\\S]*\\}/)[0]);\n} catch(e) { outline = { sections: [], error: e.message }; }\n\nreturn [{ json: {\n  ...blog, outline_json: JSON.stringify(outline),\n  status: 'outline_ready', phase_checkpoint: 3,\n  updated_date: new Date().toISOString()\n}}];"
+      },
+      "name": "Parse Outline",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "CONTENT_GENIE_SPREADSHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Content Pipeline",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "content_id": "={{ $json.content_id }}",
+            "outline_json": "={{ $json.outline_json }}",
+            "status": "outline_ready",
+            "phase_checkpoint": "3",
+            "updated_date": "={{ $json.updated_date }}"
+          },
+          "matchingColumns": [
+            "content_id"
+          ]
+        },
+        "options": {}
+      },
+      "name": "Update Sheet Outline",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [
+        1400,
+        200
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Connect this credential in n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const blog = $input.first().json;\nconst config = blog._config || $('Build Config').first().json.config;\n\nconst prompt = `Sen ${config.company_name || 'bir sirket'} icin yazan uzman bir icerik yazarisin.\n\nMARKA SESI: ${config.tone_of_voice || 'Profesyonel'}\nHEDEF KITLE: ${config.target_audience || 'Genel'}\nSEKTOR: ${config.sector || ''}\nDEGER ONERILERI: ${config.unique_selling_points || ''}\n\nBLOG:\n- Baslik: ${blog.blog_title_tr}\n- Ana Keyword: ${blog.primary_keyword}\n- Ikincil Keywords: ${blog.secondary_keywords}\n- Hedef Kelime: ${config.content_length_target || 2000}\n\nTASLAK: ${blog.outline_json || '{}'}\n\nYAZIM KURALLARI:\n1. DIL: Turkce, dogal, akici. Ana dili Turkce uzman gibi.\n2. SEO: Ana keyword ilk 100 kelimede. %1-2 yogunluk. ## H2, ### H3 Markdown.\n3. KALITE: Somut ornekler, > blockquote ile ipuclari, listeler.\n4. MARKA: ${config.company_name || 'Sirket'} adini 2-3 kez kullan. Sonucta deger onerisine atif.\n5. FORMAT: Markdown. FAQ'yi schema uyumlu yaz.\n6. MIN ${config.content_length_target || 2000} kelime.\n\nSadece Markdown blog icerigi dondur.`;\n\nreturn [{ json: {\n  ...blog, _config: config,\n  contentRequest: {\n    contents: [{ parts: [{ text: prompt }] }],\n    generationConfig: { temperature: 0.7, maxOutputTokens: 8192 }\n  }\n}}];"
+      },
+      "name": "Build Content Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.contentRequest }}",
+        "options": {}
+      },
+      "name": "Gemini Content",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        800,
+        500
+      ],
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Connect this credential in n8n"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "jsCode": "const blog = $('Build Content Prompt').first().json;\nconst content = $json.candidates?.[0]?.content?.parts?.[0]?.text || '';\nconst wordCount = content.split(/\\s+/).filter(Boolean).length;\n\nreturn [{ json: {\n  ...blog, full_content_markdown: content,\n  content_word_count: wordCount,\n  status: 'written', phase_checkpoint: 4,\n  updated_date: new Date().toISOString()\n}}];"
+      },
+      "name": "Parse Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "CONTENT_GENIE_SPREADSHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Content Pipeline",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "content_id": "={{ $json.content_id }}",
+            "content_word_count": "={{ $json.content_word_count }}",
+            "status": "written",
+            "phase_checkpoint": "4",
+            "updated_date": "={{ $json.updated_date }}"
+          },
+          "matchingColumns": [
+            "content_id"
+          ]
+        },
+        "options": {}
+      },
+      "name": "Update Sheet Content",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [
+        1400,
+        500
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Connect this credential in n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const blog = $input.first().json;\nconst config = blog._config || $('Build Config').first().json.config;\n\nconst blogTitle = blog.blog_title_tr || 'Untitled';\nconst keyword = blog.primary_keyword || '';\nconst slug = blogTitle.toLowerCase()\n  .replace(/ç/g,'c').replace(/ğ/g,'g').replace(/ı/g,'i')\n  .replace(/ö/g,'o').replace(/ş/g,'s').replace(/ü/g,'u')\n  .replace(/[^a-z0-9]+/g, '-').substring(0, 50);\n\nconst summary = (blog.full_content_markdown || '').substring(0, 800);\nconst colors = config.brand_colors || '#0060D9, #FFFFFF, #FFAF00';\nconst colArr = colors.split(',').map(c => c.trim());\n\nconst prompt = `You are the Chief Visual Officer for ${config.company_name || 'a company'} (${config.sector || 'technology'} sector).\nGenerate 3 AI image prompts for blog: \"${blogTitle}\"\nSummary: \"${summary}\"\nBrand Colors: ${colors}\nStyle: ${config.image_style || 'modern, minimalist'}\n\nRULES: NO text/logos/watermarks. Leave space for logo. 16:9 ratio. Professional aesthetic.\n\nHERO: 3D key visual for \"${keyword}\" in ${config.sector || 'tech'}. Brand colors. Product-render style. Unreal Engine 5. 8K.\nINFO: Isometric infographic about \"${keyword}\". Flat 3D, matte, clean grid. ${colArr[1] || '#F6F6F6'} bg.\nPHOTO: Cinematic corporate photo for \"${keyword}\". Sony A7R IV, bokeh, ${colArr[0] || '#0060D9'} color grade.\n\nSEO fields in TURKISH. JSON only:\n{\"hero\":{\"prompt\":\"...\",\"seo\":{\"filename\":\"${slug}-hero.jpg\",\"alt\":\"...\",\"description\":\"...\"}},\"info\":{\"prompt\":\"...\",\"seo\":{\"filename\":\"${slug}-info.jpg\",\"alt\":\"...\",\"description\":\"...\"}},\"photo\":{\"prompt\":\"...\",\"seo\":{\"filename\":\"${slug}-photo.jpg\",\"alt\":\"...\",\"description\":\"...\"}}}`;\n\nreturn [{ json: {\n  ...blog, _config: config, slug,\n  requestBody: {\n    contents: [{ parts: [{ text: prompt }] }],\n    generationConfig: { temperature: 0.7, maxOutputTokens: 2048 }\n  }\n}}];"
+      },
+      "name": "Build Image Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        1100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.requestBody }}",
+        "options": {}
+      },
+      "name": "Generate Image Prompts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        800,
+        1100
+      ],
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Connect this credential in n8n"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $json.candidates[0].content.parts[0].text;\nconst clean = raw.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\nconst prompts = JSON.parse(clean.match(/\\{[\\s\\S]*\\}/)[0]);\nconst blog = $('Build Image Request').first().json;\n\nreturn [{ json: {\n  blogId: blog.content_id,\n  content_id: blog.content_id,\n  blogTitle: blog.blog_title_tr,\n  _config: blog._config,\n  _blog: blog,\n  prompts\n}}];"
+      },
+      "name": "Parse Image Prompts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        1100
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "imageType",
+              "value": "hero",
+              "type": "string"
+            },
+            {
+              "name": "prompt",
+              "value": "={{ $json.prompts.hero.prompt }}",
+              "type": "string"
+            },
+            {
+              "name": "filename",
+              "value": "={{ $json.prompts.hero.seo.filename }}",
+              "type": "string"
+            },
+            {
+              "name": "altText",
+              "value": "={{ $json.prompts.hero.seo.alt }}",
+              "type": "string"
+            },
+            {
+              "name": "description",
+              "value": "={{ $json.prompts.hero.seo.description }}",
+              "type": "string"
+            },
+            {
+              "name": "content_id",
+              "value": "={{ $json.content_id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Set Hero",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [
+        1400,
+        900
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "image",
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-2.0-flash-exp",
+          "mode": "list"
+        },
+        "prompt": "={{ $json.prompt }}",
+        "options": {}
+      },
+      "name": "Gen Image Hero",
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        1700,
+        900
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Connect this credential in n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.item;\nconst orig = $('Set Hero').first().json;\nif (!item || !item.binary) {\n  return { json: { ...orig, success: false, error: 'No binary' } };\n}\nconst bk = Object.keys(item.binary)[0];\nreturn {\n  json: { ...orig, success: true },\n  binary: { data: Object.assign({}, item.binary[bk], { fileName: orig.filename }) }\n};"
+      },
+      "name": "Prep Upload Hero",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        900
+      ]
+    },
+    {
+      "parameters": {
+        "name": "={{ $json.filename }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "={{ $('Build Config').first().json.config.drive_folder_id }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "name": "Upload Hero",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        2300,
+        900
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Connect this credential in n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "imageType",
+              "value": "={{ $('Prep Upload Hero').item.json.imageType }}",
+              "type": "string"
+            },
+            {
+              "name": "filename",
+              "value": "={{ $('Prep Upload Hero').item.json.filename }}",
+              "type": "string"
+            },
+            {
+              "name": "altText",
+              "value": "={{ $('Prep Upload Hero').item.json.altText }}",
+              "type": "string"
+            },
+            {
+              "name": "description",
+              "value": "={{ $('Prep Upload Hero').item.json.description }}",
+              "type": "string"
+            },
+            {
+              "name": "content_id",
+              "value": "={{ $('Prep Upload Hero').item.json.content_id }}",
+              "type": "string"
+            },
+            {
+              "name": "driveId",
+              "value": "={{ $json.id }}",
+              "type": "string"
+            },
+            {
+              "name": "driveUrl",
+              "value": "=https://drive.google.com/file/d/{{ $json.id }}/view",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "URL Hero",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [
+        2600,
+        900
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $json.driveId }}",
+          "mode": "id"
+        },
+        "newUpdatedFileName": "={{ $json.filename }}",
+        "options": {}
+      },
+      "name": "Rename Hero",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        2900,
+        900
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Connect this credential in n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "CONTENT_GENIE_SPREADSHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Content Pipeline",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "content_id": "={{ $json.content_id }}",
+            "hero_image_url": "={{ $json.driveUrl }}",
+            "hero_image_id": "={{ $json.driveId }}",
+            "hero_alt_text": "={{ $json.altText }}"
+          },
+          "matchingColumns": [
+            "content_id"
+          ]
+        },
+        "options": {}
+      },
+      "name": "Sheet Hero",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [
+        3200,
+        900
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Connect this credential in n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "imageType",
+              "value": "info",
+              "type": "string"
+            },
+            {
+              "name": "prompt",
+              "value": "={{ $json.prompts.info.prompt }}",
+              "type": "string"
+            },
+            {
+              "name": "filename",
+              "value": "={{ $json.prompts.info.seo.filename }}",
+              "type": "string"
+            },
+            {
+              "name": "altText",
+              "value": "={{ $json.prompts.info.seo.alt }}",
+              "type": "string"
+            },
+            {
+              "name": "description",
+              "value": "={{ $json.prompts.info.seo.description }}",
+              "type": "string"
+            },
+            {
+              "name": "content_id",
+              "value": "={{ $json.content_id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Set Info",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [
+        1400,
+        1100
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "image",
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-2.0-flash-exp",
+          "mode": "list"
+        },
+        "prompt": "={{ $json.prompt }}",
+        "options": {}
+      },
+      "name": "Gen Image Info",
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        1700,
+        1100
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Connect this credential in n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.item;\nconst orig = $('Set Info').first().json;\nif (!item || !item.binary) {\n  return { json: { ...orig, success: false, error: 'No binary' } };\n}\nconst bk = Object.keys(item.binary)[0];\nreturn {\n  json: { ...orig, success: true },\n  binary: { data: Object.assign({}, item.binary[bk], { fileName: orig.filename }) }\n};"
+      },
+      "name": "Prep Upload Info",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        1100
+      ]
+    },
+    {
+      "parameters": {
+        "name": "={{ $json.filename }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "={{ $('Build Config').first().json.config.drive_folder_id }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "name": "Upload Info",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        2300,
+        1100
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Connect this credential in n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "imageType",
+              "value": "={{ $('Prep Upload Info').item.json.imageType }}",
+              "type": "string"
+            },
+            {
+              "name": "filename",
+              "value": "={{ $('Prep Upload Info').item.json.filename }}",
+              "type": "string"
+            },
+            {
+              "name": "altText",
+              "value": "={{ $('Prep Upload Info').item.json.altText }}",
+              "type": "string"
+            },
+            {
+              "name": "description",
+              "value": "={{ $('Prep Upload Info').item.json.description }}",
+              "type": "string"
+            },
+            {
+              "name": "content_id",
+              "value": "={{ $('Prep Upload Info').item.json.content_id }}",
+              "type": "string"
+            },
+            {
+              "name": "driveId",
+              "value": "={{ $json.id }}",
+              "type": "string"
+            },
+            {
+              "name": "driveUrl",
+              "value": "=https://drive.google.com/file/d/{{ $json.id }}/view",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "URL Info",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [
+        2600,
+        1100
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $json.driveId }}",
+          "mode": "id"
+        },
+        "newUpdatedFileName": "={{ $json.filename }}",
+        "options": {}
+      },
+      "name": "Rename Info",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        2900,
+        1100
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Connect this credential in n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "CONTENT_GENIE_SPREADSHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Content Pipeline",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "content_id": "={{ $json.content_id }}",
+            "info_image_url": "={{ $json.driveUrl }}",
+            "info_image_id": "={{ $json.driveId }}",
+            "info_alt_text": "={{ $json.altText }}"
+          },
+          "matchingColumns": [
+            "content_id"
+          ]
+        },
+        "options": {}
+      },
+      "name": "Sheet Info",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [
+        3200,
+        1100
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Connect this credential in n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "imageType",
+              "value": "photo",
+              "type": "string"
+            },
+            {
+              "name": "prompt",
+              "value": "={{ $json.prompts.photo.prompt }}",
+              "type": "string"
+            },
+            {
+              "name": "filename",
+              "value": "={{ $json.prompts.photo.seo.filename }}",
+              "type": "string"
+            },
+            {
+              "name": "altText",
+              "value": "={{ $json.prompts.photo.seo.alt }}",
+              "type": "string"
+            },
+            {
+              "name": "description",
+              "value": "={{ $json.prompts.photo.seo.description }}",
+              "type": "string"
+            },
+            {
+              "name": "content_id",
+              "value": "={{ $json.content_id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Set Photo",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [
+        1400,
+        1300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "image",
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-2.0-flash-exp",
+          "mode": "list"
+        },
+        "prompt": "={{ $json.prompt }}",
+        "options": {}
+      },
+      "name": "Gen Image Photo",
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.1,
+      "position": [
+        1700,
+        1300
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Connect this credential in n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.item;\nconst orig = $('Set Photo').first().json;\nif (!item || !item.binary) {\n  return { json: { ...orig, success: false, error: 'No binary' } };\n}\nconst bk = Object.keys(item.binary)[0];\nreturn {\n  json: { ...orig, success: true },\n  binary: { data: Object.assign({}, item.binary[bk], { fileName: orig.filename }) }\n};"
+      },
+      "name": "Prep Upload Photo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        1300
+      ]
+    },
+    {
+      "parameters": {
+        "name": "={{ $json.filename }}",
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "={{ $('Build Config').first().json.config.drive_folder_id }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "name": "Upload Photo",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        2300,
+        1300
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Connect this credential in n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "imageType",
+              "value": "={{ $('Prep Upload Photo').item.json.imageType }}",
+              "type": "string"
+            },
+            {
+              "name": "filename",
+              "value": "={{ $('Prep Upload Photo').item.json.filename }}",
+              "type": "string"
+            },
+            {
+              "name": "altText",
+              "value": "={{ $('Prep Upload Photo').item.json.altText }}",
+              "type": "string"
+            },
+            {
+              "name": "description",
+              "value": "={{ $('Prep Upload Photo').item.json.description }}",
+              "type": "string"
+            },
+            {
+              "name": "content_id",
+              "value": "={{ $('Prep Upload Photo').item.json.content_id }}",
+              "type": "string"
+            },
+            {
+              "name": "driveId",
+              "value": "={{ $json.id }}",
+              "type": "string"
+            },
+            {
+              "name": "driveUrl",
+              "value": "=https://drive.google.com/file/d/{{ $json.id }}/view",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "URL Photo",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [
+        2600,
+        1300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $json.driveId }}",
+          "mode": "id"
+        },
+        "newUpdatedFileName": "={{ $json.filename }}",
+        "options": {}
+      },
+      "name": "Rename Photo",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        2900,
+        1300
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Connect this credential in n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "CONTENT_GENIE_SPREADSHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Content Pipeline",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "content_id": "={{ $json.content_id }}",
+            "photo_image_url": "={{ $json.driveUrl }}",
+            "photo_image_id": "={{ $json.driveId }}",
+            "photo_alt_text": "={{ $json.altText }}",
+            "status": "images_done",
+            "phase_checkpoint": "6"
+          },
+          "matchingColumns": [
+            "content_id"
+          ]
+        },
+        "options": {}
+      },
+      "name": "Sheet Photo",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [
+        3200,
+        1300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Connect this credential in n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const photoData = $('Rename Photo').first().json;\nreturn [{ json: {\n  content_id: photoData.content_id,\n  status: 'publish_ready', phase_checkpoint: 7,\n  updated_date: new Date().toISOString()\n}}];"
+      },
+      "name": "Final Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3500,
+        1100
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "CONTENT_GENIE_SPREADSHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Content Pipeline",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "content_id": "={{ $json.content_id }}",
+            "status": "publish_ready",
+            "phase_checkpoint": "7",
+            "updated_date": "={{ $json.updated_date }}"
+          },
+          "matchingColumns": [
+            "content_id"
+          ]
+        },
+        "options": {}
+      },
+      "name": "Update Final",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [
+        3800,
+        1100
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Connect this credential in n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## FAZ 0: Config & Setup\nConfig + Keywords + Pipeline sheet oku.\nResume logic ile yari kalan isleri tespit et.",
+        "height": 140,
+        "width": 320
+      },
+      "name": "Note 0",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -6500,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## FAZ 1: Keyword Discovery\nSerpAPI ile SERP sonuclari cek.\nGemini AI ile analiz et.\nKeywords sheet'e yaz.",
+        "height": 140,
+        "width": 320
+      },
+      "name": "Note 1",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -4700,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## FAZ 2: Topic Planning\nGemini ile clustering.\nBlog konulari + basliklar.\nContent Pipeline'a yaz.",
+        "height": 140,
+        "width": 320
+      },
+      "name": "Note 2",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1700,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## FAZ 3: Icerik Uretimi\n3A: Outline -> 3B: Full Content\nCheckpoint-based resume.",
+        "height": 140,
+        "width": 320
+      },
+      "name": "Note 3",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        100,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## FAZ 4: Google Docs\nDoc olustur, formatla, klasore tasi.",
+        "height": 120,
+        "width": 320
+      },
+      "name": "Note 4",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        400,
+        650
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## FAZ 5: 3 Paralel Gorsel Pipeline\nHero / Info / Photo\nGenerate -> Upload -> Rename",
+        "height": 120,
+        "width": 320
+      },
+      "name": "Note 5",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1300,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## FAZ 6: Final\npublish_ready -> next blog",
+        "height": 100,
+        "width": 300
+      },
+      "name": "Note 6",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        3400,
+        900
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.phase_checkpoint }}",
+              "rightValue": "3",
+              "operator": {
+                "type": "number",
+                "operation": "lt"
+              }
+            }
+          ],
+          "combinator": "and",
+          "options": {
+            "caseSensitive": true,
+            "leftValue": ""
+          }
+        },
+        "options": {}
+      },
+      "name": "Is Outline?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        200,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.phase_checkpoint }}",
+              "rightValue": "3",
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and",
+          "options": {
+            "caseSensitive": true,
+            "leftValue": ""
+          }
+        },
+        "options": {}
+      },
+      "name": "Is Content?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        200,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.phase_checkpoint }}",
+              "rightValue": "4",
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and",
+          "options": {
+            "caseSensitive": true,
+            "leftValue": ""
+          }
+        },
+        "options": {}
+      },
+      "name": "Is Docs?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        200,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.phase_checkpoint }}",
+              "rightValue": "5",
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and",
+          "options": {
+            "caseSensitive": true,
+            "leftValue": ""
+          }
+        },
+        "options": {}
+      },
+      "name": "Is Images?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        200,
+        1000
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Instead of Google Docs, save content URL placeholder\\nconst blog = $input.first().json;\\nconst content_id = blog.content_id;\\n// Content is saved in Google Sheet, user can copy to Google Docs\\nreturn [{ json: {\\n  ...blog,\\n  doc_url: 'sheet_content',\\n  doc_id: content_id,\\n  status: 'doc_created',\\n  phase_checkpoint: 5,\\n  updated_date: new Date().toISOString()\\n}}];"
+      },
+      "name": "Prepare Doc Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1700,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "CONTENT_GENIE_SPREADSHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Content Pipeline",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "content_id": "={{ $json.content_id }}",
+            "doc_url": "={{ $json.doc_url }}",
+            "status": "doc_created",
+            "phase_checkpoint": "5",
+            "updated_date": "={{ $json.updated_date }}"
+          },
+          "matchingColumns": [
+            "content_id"
+          ]
+        },
+        "options": {}
+      },
+      "name": "Update Sheet Doc Status",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [
+        2000,
+        800
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "Connect this credential in n8n"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Config": {
+      "main": [
+        [
+          {
+            "node": "Build Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Config": {
+      "main": [
+        [
+          {
+            "node": "Read Keywords Sheet",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Read Content Pipeline",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Keywords Sheet": {
+      "main": [
+        [
+          {
+            "node": "Resume Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Content Pipeline": {
+      "main": [
+        [
+          {
+            "node": "Resume Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resume Check": {
+      "main": [
+        [
+          {
+            "node": "Needs Discovery?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs Discovery?": {
+      "main": [
+        [
+          {
+            "node": "Build Search Queries",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Top Keywords",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Search Queries": {
+      "main": [
+        [
+          {
+            "node": "Process Searches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Searches": {
+      "main": [
+        [
+          {
+            "node": "Merge All SERP Data",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "SerpAPI Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SerpAPI Search": {
+      "main": [
+        [
+          {
+            "node": "Collect SERP Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge All SERP Data": {
+      "main": [
+        [
+          {
+            "node": "Build KW Analysis Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build KW Analysis Prompt": {
+      "main": [
+        [
+          {
+            "node": "Gemini KW Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini KW Analysis": {
+      "main": [
+        [
+          {
+            "node": "Parse KW Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse KW Analysis": {
+      "main": [
+        [
+          {
+            "node": "Append Keywords Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append Keywords Sheet": {
+      "main": [
+        [
+          {
+            "node": "Prepare Top Keywords",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Top Keywords": {
+      "main": [
+        [
+          {
+            "node": "Build Topic Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Topic Prompt": {
+      "main": [
+        [
+          {
+            "node": "Gemini Topics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Topics": {
+      "main": [
+        [
+          {
+            "node": "Parse Topics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Topics": {
+      "main": [
+        [
+          {
+            "node": "Write Blog Plans",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Blog Plans": {
+      "main": [
+        [
+          {
+            "node": "Process Blogs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Blogs": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Is Outline?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Outline Prompt": {
+      "main": [
+        [
+          {
+            "node": "Gemini Outline",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Outline": {
+      "main": [
+        [
+          {
+            "node": "Parse Outline",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Outline": {
+      "main": [
+        [
+          {
+            "node": "Update Sheet Outline",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Sheet Outline": {
+      "main": [
+        [
+          {
+            "node": "Build Content Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Content Prompt": {
+      "main": [
+        [
+          {
+            "node": "Gemini Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Content": {
+      "main": [
+        [
+          {
+            "node": "Parse Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Content": {
+      "main": [
+        [
+          {
+            "node": "Update Sheet Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Image Request": {
+      "main": [
+        [
+          {
+            "node": "Generate Image Prompts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Image Prompts": {
+      "main": [
+        [
+          {
+            "node": "Parse Image Prompts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Image Prompts": {
+      "main": [
+        [
+          {
+            "node": "Set Hero",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Set Info",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Set Photo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Hero": {
+      "main": [
+        [
+          {
+            "node": "Gen Image Hero",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gen Image Hero": {
+      "main": [
+        [
+          {
+            "node": "Prep Upload Hero",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prep Upload Hero": {
+      "main": [
+        [
+          {
+            "node": "Upload Hero",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload Hero": {
+      "main": [
+        [
+          {
+            "node": "URL Hero",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "URL Hero": {
+      "main": [
+        [
+          {
+            "node": "Rename Hero",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rename Hero": {
+      "main": [
+        [
+          {
+            "node": "Sheet Hero",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Info": {
+      "main": [
+        [
+          {
+            "node": "Gen Image Info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gen Image Info": {
+      "main": [
+        [
+          {
+            "node": "Prep Upload Info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prep Upload Info": {
+      "main": [
+        [
+          {
+            "node": "Upload Info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload Info": {
+      "main": [
+        [
+          {
+            "node": "URL Info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "URL Info": {
+      "main": [
+        [
+          {
+            "node": "Rename Info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rename Info": {
+      "main": [
+        [
+          {
+            "node": "Sheet Info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Photo": {
+      "main": [
+        [
+          {
+            "node": "Gen Image Photo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gen Image Photo": {
+      "main": [
+        [
+          {
+            "node": "Prep Upload Photo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prep Upload Photo": {
+      "main": [
+        [
+          {
+            "node": "Upload Photo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload Photo": {
+      "main": [
+        [
+          {
+            "node": "URL Photo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "URL Photo": {
+      "main": [
+        [
+          {
+            "node": "Rename Photo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rename Photo": {
+      "main": [
+        [
+          {
+            "node": "Sheet Photo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sheet Photo": {
+      "main": [
+        [
+          {
+            "node": "Final Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Final Status": {
+      "main": [
+        [
+          {
+            "node": "Update Final",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Outline?": {
+      "main": [
+        [
+          {
+            "node": "Build Outline Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is Content?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Content?": {
+      "main": [
+        [
+          {
+            "node": "Build Content Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is Docs?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Docs?": {
+      "main": [
+        [
+          {
+            "node": "Prepare Doc Status",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Is Images?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Images?": {
+      "main": [
+        [
+          {
+            "node": "Build Image Request",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Process Blogs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Sheet Content": {
+      "main": [
+        [
+          {
+            "node": "Prepare Doc Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Doc Status": {
+      "main": [
+        [
+          {
+            "node": "Update Sheet Doc Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Sheet Doc Status": {
+      "main": [
+        [
+          {
+            "node": "Build Image Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Final": {
+      "main": [
+        [
+          {
+            "node": "Process Blogs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect SERP Data": {
+      "main": [
+        [
+          {
+            "node": "Process Searches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionTimeout": 1800,
+    "saveManualExecutions": true,
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all"
+  },
+  "tags": [
+    {
+      "name": "Content Genie"
+    },
+    {
+      "name": "SEO"
+    },
+    {
+      "name": "Blog Automation"
+    }
+  ]
+}

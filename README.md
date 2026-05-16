@@ -21,6 +21,10 @@ cd content-genie
 make demo
 ```
 
+📘 **Want a full step-by-step walkthrough?** Read [GETTING_STARTED.md](GETTING_STARTED.md) — covers Groq + WordPress setup, batch processing, scheduling, and troubleshooting.
+
+🧰 **Prefer no-code?** The same pipeline as an importable n8n workflow lives in [`n8n/`](n8n/) with a node-by-node walkthrough.
+
 You'll see a new run directory under `output/`:
 
 ```
